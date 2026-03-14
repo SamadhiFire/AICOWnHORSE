@@ -137,7 +137,7 @@
           <view class="card-shell">
             <view class="arrow-panel" :class="leftArrowPressed ? 'is-active' : ''" @click="prevQuiz">
               <view class="arrow-circle">
-                <image class="arrow-svg" :src="leftArrowPressed ? leftArrowActiveSvg : leftArrowSvg" mode="aspectFit" />
+                <text class="arrow-icon" :class="leftArrowPressed ? 'is-active' : ''">‹</text>
               </view>
             </view>
 
@@ -185,7 +185,7 @@
 
             <view class="arrow-panel" :class="rightArrowPressed ? 'is-active' : ''" @click="nextQuiz">
               <view class="arrow-circle">
-                <image class="arrow-svg" :src="rightArrowPressed ? rightArrowActiveSvg : rightArrowSvg" mode="aspectFit" />
+                <text class="arrow-icon" :class="rightArrowPressed ? 'is-active' : ''">›</text>
               </view>
             </view>
           </view>
@@ -266,10 +266,6 @@ const DEFAULT_GENERAL_TAG = '综合'
 const DEFAULT_OTHER_TAG = '其他'
 const MAX_COLLECTION_RUNTIME_SNAPSHOT = 96
 const TAG_SCROLL_STEP_RPX = 200
-const leftArrowSvg = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" fill="none"><path d="M24 8L14 20l10 12" stroke="%238E8E93" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-const rightArrowSvg = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" fill="none"><path d="M16 8l10 12-10 12" stroke="%238E8E93" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-const leftArrowActiveSvg = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" fill="none"><path d="M24 8L14 20l10 12" stroke="%2307C160" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-const rightArrowActiveSvg = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" fill="none"><path d="M16 8l10 12-10 12" stroke="%2307C160" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 const emptyStateSvg = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" fill="none"><rect x="20" y="16" width="80" height="88" rx="12" stroke="%23D1D1D6" stroke-width="1.5" stroke-dasharray="4 4"/><path d="M44 48h32M44 64h32M44 80h22" stroke="%23D1D1D6" stroke-width="1.5" stroke-linecap="round"/></svg>'
 
 type AppGuideGlobalData = {
@@ -1955,9 +1951,9 @@ watch([() => shouldShowTagGuide.value, () => customOrderedTags.value.join('|')],
 }
 
 .arrow-panel {
-  width: 40rpx;
+  width: 72rpx;
   min-height: 700rpx;
-  flex: 0 0 40rpx;
+  flex: 0 0 72rpx;
   border: 0;
   background: transparent;
   display: flex;
@@ -1970,10 +1966,12 @@ watch([() => shouldShowTagGuide.value, () => customOrderedTags.value.join('|')],
 }
 
 .arrow-circle {
-  width: 48rpx;
-  height: 48rpx;
+  width: 56rpx;
+  height: 56rpx;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.85);
+  background: #ffffff;
+  border: 1rpx solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 12rpx 26rpx rgba(0, 0, 0, 0.12);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1982,14 +1980,22 @@ watch([() => shouldShowTagGuide.value, () => customOrderedTags.value.join('|')],
   box-sizing: border-box;
 }
 
-.arrow-svg {
-  width: 32rpx;
-  height: 32rpx;
-  box-sizing: border-box;
+.arrow-icon {
+  font-size: 42rpx;
+  line-height: 1;
+  font-weight: 700;
+  color: #3C4043;
+  transform: translateY(-1rpx);
+}
+
+.arrow-icon.is-active {
+  color: #07C160;
 }
 
 .arrow-panel.is-active .arrow-circle {
-  transform: scale(1.1);
+  transform: scale(1.06);
+  border-color: rgba(7, 193, 96, 0.55);
+  background: rgba(7, 193, 96, 0.08);
 }
 
 .quiz-card {

@@ -27,6 +27,13 @@ export interface GuestLoginResult {
   expiresIn: number
 }
 
+export interface CredentialAuthPayload {
+  account: string
+  password: string
+  nickname?: string
+  avatarUrl?: string
+}
+
 const AUTH_STORAGE_KEY = 'study_backend_auth_v1'
 const DEFAULT_NICKNAME = 'Guest'
 
@@ -44,6 +51,20 @@ function normalizeTimestamp(raw: unknown): number {
 
 function normalizeNickname(raw: unknown): string {
   return String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 32) || DEFAULT_NICKNAME
+}
+
+function normalizeAuthAccount(raw: unknown): string {
+  return String(raw || '').replace(/\s+/g, '').trim().slice(0, 80)
+}
+
+function parseAccountChannels(account: string): { email: string; phone: string } {
+  const clean = normalizeAuthAccount(account)
+  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)
+  const isPhone = /^\+?\d{6,20}$/.test(clean)
+  return {
+    email: isEmail ? clean : '',
+    phone: isPhone ? clean : '',
+  }
 }
 
 function normalizeUserProfile(raw: unknown): UserProfile | null {
@@ -243,6 +264,53 @@ export async function loginAsGuest(profile?: {
   }
 
   return pendingGuestLoginPromise
+}
+
+async function authenticateByCredential(
+  path: '/auth/login' | '/auth/register',
+  payload: CredentialAuthPayload,
+): Promise<GuestLoginResult> {
+  const account = normalizeAuthAccount(payload.account)
+  const password = String(payload.password || '').trim()
+  if (!account) {
+    throw new Error('请输入手机号或邮箱')
+  }
+  if (!password) {
+    throw new Error('请输入密码')
+  }
+
+  const channels = parseAccountChannels(account)
+  try {
+    const data = await apiRequest<{
+      token?: unknown
+      refreshToken?: unknown
+      expiresIn?: unknown
+      isNew?: unknown
+      user?: unknown
+    }>({
+      path,
+      method: 'POST',
+      data: {
+        account,
+        email: channels.email,
+        phone: channels.phone,
+        password,
+        nickname: normalizeNickname(payload.nickname),
+        avatarUrl: String(payload.avatarUrl || '').trim(),
+      },
+    })
+    return saveAuthResult(data)
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function loginWithCredential(payload: Pick<CredentialAuthPayload, 'account' | 'password'>): Promise<GuestLoginResult> {
+  return authenticateByCredential('/auth/login', payload as CredentialAuthPayload)
+}
+
+export async function registerWithCredential(payload: CredentialAuthPayload): Promise<GuestLoginResult> {
+  return authenticateByCredential('/auth/register', payload)
 }
 
 export async function refreshAuthToken(): Promise<GuestLoginResult | null> {

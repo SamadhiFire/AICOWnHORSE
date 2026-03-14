@@ -1,5 +1,4 @@
-const DEFAULT_API_BASE_URL = 'http://localhost:3000/api/v1'
-const API_BASE_URL_STORAGE_KEY = 'study_api_base_url_v1'
+const DEFAULT_API_BASE_URL = 'http://localhost:3000'
 
 export interface ApiEnvelope<TData = unknown> {
   code?: number
@@ -54,9 +53,8 @@ function resolveEnvApiBaseUrl(): string {
 }
 
 export function resolveApiBaseUrl(): string {
-  const fromStorage = trimTrailingSlash(String(uni.getStorageSync(API_BASE_URL_STORAGE_KEY) || '').trim())
   const fromEnv = resolveEnvApiBaseUrl()
-  return fromStorage || fromEnv || DEFAULT_API_BASE_URL
+  return fromEnv || DEFAULT_API_BASE_URL
 }
 
 function buildUrl(path: string): string {

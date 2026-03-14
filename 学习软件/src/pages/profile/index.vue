@@ -25,8 +25,10 @@
             </view>
           </button>
           <view class="profile-main">
-            <view class="profile-name-row" @click.stop>
+            <view class="profile-name-row" @click.stop="handleProfileNameTap">
+              <text v-if="isGuestProfile" class="profile-login-title">点击登录 / 注册</text>
               <input
+                v-else
                 v-model="profileNicknameDraft"
                 class="profile-nickname-input"
                 type="text"
@@ -37,7 +39,7 @@
                 @blur="handleNicknameBlur"
               />
             </view>
-            <text v-if="isGuestProfile" class="profile-login-tip">点击卡片启用账号，之后可保存昵称与头像</text>
+            <text v-if="isGuestProfile" class="profile-login-tip">点击登录 / 注册，立即同步账号与练习进度</text>
           </view>
         </view>
 
@@ -209,10 +211,84 @@
             </view>
           </view>
         </view>
+
+        <view v-if="!isGuestProfile" class="panel oa-card-surface auth-action-panel">
+          <button
+            class="logout-btn"
+            hover-class="logout-btn-hover"
+            :disabled="profileUpdating || profileAuthLoading"
+            @click="handleLogout"
+          >
+            退出登录
+          </button>
+          <text class="logout-hint">退出后将回到游客模式，后台仍保留题集与配置。</text>
+        </view>
       </view>
     </scroll-view>
 
     <WorkMaskOverlay v-if="goalLoading" @cancel="cancelGoalGeneration" />
+
+    <transition name="dialog-fade">
+      <view v-if="showAuthDialog && isGuestProfile" class="auth-dialog-backdrop" @click.self="closeAuthDialog">
+        <view class="auth-dialog-card">
+          <text class="auth-dialog-title">登录 / 注册</text>
+          <view class="auth-dialog-form">
+            <text class="auth-dialog-field-label">手机号 / 邮箱</text>
+            <input
+              v-model="authDialogAccountDraft"
+              class="auth-dialog-input"
+              type="text"
+              maxlength="80"
+              :disabled="profileAuthLoading"
+              placeholder="请输入手机号或邮箱"
+              placeholder-style="color:#A7A7A7;"
+            />
+          </view>
+          <view class="auth-dialog-form">
+            <text class="auth-dialog-field-label">密码</text>
+            <input
+              v-model="authDialogPasswordDraft"
+              class="auth-dialog-input"
+              type="text"
+              :password="true"
+              maxlength="64"
+              :disabled="profileAuthLoading"
+              placeholder="请输入密码"
+              placeholder-style="color:#A7A7A7;"
+              @confirm="confirmAuthDialog"
+            />
+          </view>
+          <view class="auth-dialog-form">
+            <text class="auth-dialog-field-label">昵称（可选）</text>
+            <input
+              v-model="authDialogNicknameDraft"
+              class="auth-dialog-input"
+              type="text"
+              maxlength="32"
+              :disabled="profileAuthLoading"
+              placeholder="请输入昵称（可选）"
+              placeholder-style="color:#A7A7A7;"
+              @confirm="confirmAuthDialog"
+            />
+          </view>
+          <button
+            class="auth-dialog-cta"
+            :class="profileAuthLoading ? 'is-loading' : ''"
+            :disabled="profileAuthLoading"
+            @click="confirmAuthDialog"
+          >
+            {{ profileAuthLoading ? (authDialogMode === 'register' ? '注册中...' : '登录中...') : (authDialogMode === 'register' ? '立即注册' : '立即登录') }}
+          </button>
+          <button class="auth-dialog-cta secondary" :disabled="profileAuthLoading" @click="closeAuthDialog">
+            稍后再说
+          </button>
+          <view v-if="authDialogMode === 'login'" class="auth-dialog-switch-row">
+            <text class="auth-dialog-switch-prefix">还没有账号？点击</text>
+            <text class="auth-dialog-switch-action" @click="switchToRegisterMode">立即注册</text>
+          </view>
+        </view>
+      </view>
+    </transition>
 
     <InsTabBar active="profile" />
   </view>
@@ -255,13 +331,15 @@ import {
   generateTagsInBackend,
   retagHistoricalQuestionsInBackend,
 } from '../../utils/backend-sync'
-import { uploadAvatarFile } from '../../utils/account'
+import { loginWithCredential, registerWithCredential, uploadAvatarFile } from '../../utils/account'
 import {
+  clearBackendAuthState,
   ensureBackendAccount,
   fetchBackendProfile,
   loadBackendAuthState,
   saveBackendAuthState,
   type BackendAuthState,
+  type BackendUserProfile,
   updateBackendProfileByPayload,
 } from '../../utils/backend-user'
 
@@ -274,6 +352,7 @@ const USER_PROFILE_KEY = 'study_quiz_user_profile_v1'
 const TAG_GUIDE_DISMISSED_KEY = 'study_tag_guide_dismissed_v1'
 const API_KEY_SYNC_EVENT = 'study_api_key_changed'
 const PROFILE_AI_DRAFT_KEY = 'study_profile_ai_draft_v1'
+const PROFILE_MANUAL_AUTH_KEY = 'study_profile_manual_auth_v1'
 const GOAL_API_KEY_REQUIRED_ERROR = '请先完成 API Key 配置'
 const GUIDE_HIGHLIGHT_DURATION = 8000
 const API_GUIDE_HIGHLIGHT_DURATION = 3000
@@ -318,6 +397,7 @@ const retagLoading = ref(false)
 const profileAuthLoading = ref(false)
 const profileUpdating = ref(false)
 const profileNicknameDraft = ref('')
+const manualAuthEnabled = ref(loadManualAuthEnabled())
 const backendAuthState = ref<BackendAuthState | null>(loadBackendAuthState())
 const guideGenerateHighlight = ref(false)
 const apiGuideHighlight = ref(false)
@@ -334,6 +414,13 @@ const profileTitleDecoCandidates = [
 const profileTitleDecoIndex = ref(0)
 const profileTitleDecoSrc = computed(() => profileTitleDecoCandidates[profileTitleDecoIndex.value] || profileTitleDecoCandidates[0])
 
+const showAuthDialog = ref(false)
+const authDialogSeed = ref<{ nickname?: string; avatarUrl?: string } | null>(null)
+const authDialogMode = ref<'login' | 'register'>('login')
+const authDialogAccountDraft = ref('')
+const authDialogPasswordDraft = ref('')
+const authDialogNicknameDraft = ref('')
+
 type GenerateGoalTagsOptions = {
   regenerate?: boolean
   previousTags?: string[]
@@ -346,11 +433,25 @@ function isGenerateGoalTagsOptions(value: unknown): value is GenerateGoalTagsOpt
   return 'regenerate' in candidate || 'previousTags' in candidate || 'regenerateRound' in candidate
 }
 
+function loadManualAuthEnabled(): boolean {
+  const raw = uni.getStorageSync(PROFILE_MANUAL_AUTH_KEY)
+  return raw === 1 || raw === '1' || raw === true || raw === 'true'
+}
+
+function setManualAuthEnabled(enabled: boolean) {
+  manualAuthEnabled.value = enabled
+  if (enabled) {
+    uni.setStorageSync(PROFILE_MANUAL_AUTH_KEY, 1)
+    return
+  }
+  uni.removeStorageSync(PROFILE_MANUAL_AUTH_KEY)
+}
+
 const profile = ref<LocalUserProfile>({
   avatarUrl: '',
   nickname: DEFAULT_NICKNAME,
 })
-const isGuestProfile = computed(() => !backendAuthState.value)
+const isGuestProfile = computed(() => !manualAuthEnabled.value || !backendAuthState.value)
 
 const providerIndex = computed(() => {
   const idx = providerOptions.value.findIndex((item) => item.value === provider.value)
@@ -599,7 +700,17 @@ async function runApiKeyConnectivityCheck() {
 }
 
 function loadUserProfile() {
+  manualAuthEnabled.value = loadManualAuthEnabled()
   backendAuthState.value = loadBackendAuthState()
+
+  if (backendAuthState.value && !manualAuthEnabled.value) {
+    const backendNickname = normalizeNickname(backendAuthState.value.nickname)
+    const hasCustomizedProfile = backendNickname !== DEFAULT_NICKNAME
+      || String(backendAuthState.value.avatarUrl || '').trim().length > 0
+    if (hasCustomizedProfile) {
+      setManualAuthEnabled(true)
+    }
+  }
 
   if (backendAuthState.value) {
     profile.value = {
@@ -656,6 +767,18 @@ function normalizeNickname(raw: string): string {
   return String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 32) || DEFAULT_NICKNAME
 }
 
+function normalizeAuthAccount(raw: string): string {
+  return String(raw || '').replace(/\s+/g, '').trim().slice(0, 80)
+}
+
+function isEmailAccount(raw: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)
+}
+
+function isPhoneAccount(raw: string): boolean {
+  return /^\+?\d{6,20}$/.test(raw)
+}
+
 async function ensureBackendUser(profileSeed?: { nickname?: string; avatarUrl?: string }) {
   const remote = await fetchBackendProfile().catch(() => null)
   if (remote) {
@@ -677,6 +800,144 @@ async function ensureBackendUser(profileSeed?: { nickname?: string; avatarUrl?: 
 
   saveBackendAndLocalProfile(result.user)
   return result
+}
+
+function openAuthDialog(seed?: { nickname?: string; avatarUrl?: string }) {
+  if (profileAuthLoading.value || !isGuestProfile.value) return
+  authDialogSeed.value = seed || null
+  authDialogMode.value = 'login'
+  authDialogAccountDraft.value = ''
+  authDialogPasswordDraft.value = ''
+  const seededNickname = normalizeNickname(seed?.nickname || profileNicknameDraft.value || profile.value.nickname)
+  authDialogNicknameDraft.value = seededNickname === DEFAULT_NICKNAME ? '' : seededNickname
+  showAuthDialog.value = true
+}
+
+function switchToRegisterMode() {
+  if (profileAuthLoading.value) return
+  authDialogMode.value = 'register'
+}
+
+function closeAuthDialog() {
+  showAuthDialog.value = false
+  authDialogMode.value = 'login'
+  authDialogAccountDraft.value = ''
+  authDialogPasswordDraft.value = ''
+  authDialogNicknameDraft.value = ''
+}
+
+async function performProfileAuth(
+  profileSeed?: { nickname?: string; avatarUrl?: string },
+  credentialPayload?: {
+    mode: 'login' | 'register'
+    account: string
+    password: string
+  },
+) {
+  if (profileAuthLoading.value) return null
+  profileAuthLoading.value = true
+  showAuthDialog.value = false
+  try {
+    const nicknameSeed = normalizeNickname(profileSeed?.nickname || profile.value.nickname)
+    const avatarSeed = String(profileSeed?.avatarUrl || profile.value.avatarUrl || '').trim()
+    let result: { user: BackendUserProfile | null; isNew: boolean }
+    if (credentialPayload) {
+      const account = credentialPayload.account
+      const password = credentialPayload.password
+      const actionLabel = credentialPayload.mode === 'register' ? '注册' : '登录'
+      const authResult = credentialPayload.mode === 'register'
+        ? await registerWithCredential({
+            account,
+            password,
+            nickname: nicknameSeed,
+            avatarUrl: avatarSeed,
+          })
+        : await loginWithCredential({
+            account,
+            password,
+          })
+
+      if (!authResult.user) {
+        throw new Error(actionLabel === '注册' ? '注册失败，请稍后重试' : '登录失败，请稍后重试')
+      }
+      saveBackendAndLocalProfile(authResult.user)
+      result = {
+        user: authResult.user,
+        isNew: actionLabel === '注册' ? true : Boolean(authResult.isNew),
+      }
+    } else {
+      result = await ensureBackendUser({
+        nickname: nicknameSeed,
+        avatarUrl: avatarSeed,
+      })
+    }
+
+    setManualAuthEnabled(true)
+    profileNicknameDraft.value = normalizeNickname(loadBackendAuthState()?.nickname || result.user?.nickname || nicknameSeed)
+    uni.showToast({
+      title: credentialPayload ? (credentialPayload.mode === 'register' ? '注册成功' : '登录成功') : (result.isNew ? '账号已可用' : '账号已连接'),
+      icon: 'success',
+    })
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '登录失败'
+    uni.showToast({
+      title: message.length > 15 ? '登录失败，请重试' : message,
+      icon: 'none',
+    })
+    return null
+  } finally {
+    profileAuthLoading.value = false
+  }
+}
+
+async function confirmAuthDialog() {
+  const account = normalizeAuthAccount(authDialogAccountDraft.value)
+  if (!account) {
+    uni.showToast({
+      title: '请输入手机号或邮箱',
+      icon: 'none',
+    })
+    return
+  }
+  if (!isEmailAccount(account) && !isPhoneAccount(account)) {
+    uni.showToast({
+      title: '账号格式不正确',
+      icon: 'none',
+    })
+    return
+  }
+  const password = String(authDialogPasswordDraft.value || '').trim()
+  if (!password) {
+    uni.showToast({
+      title: '请输入密码',
+      icon: 'none',
+    })
+    return
+  }
+  if (password.length < 6) {
+    uni.showToast({
+      title: '密码至少 6 位',
+      icon: 'none',
+    })
+    return
+  }
+
+  const seed = authDialogSeed.value || {}
+  const nickname = normalizeNickname(authDialogNicknameDraft.value || seed.nickname || profile.value.nickname)
+  await performProfileAuth({
+    ...seed,
+    nickname,
+  }, {
+    mode: authDialogMode.value,
+    account,
+    password,
+  })
+  authDialogSeed.value = null
+  authDialogMode.value = 'login'
+  authDialogAccountDraft.value = ''
+  authDialogPasswordDraft.value = ''
+  authDialogNicknameDraft.value = ''
 }
 
 async function chooseAvatarImage(): Promise<string> {
@@ -880,33 +1141,19 @@ async function hydrateProviderOptions() {
 
 async function handleProfileCardTap() {
   if (!isGuestProfile.value || profileAuthLoading.value || profileUpdating.value) return
+  openAuthDialog({
+    nickname: normalizeNickname(profileNicknameDraft.value || profile.value.nickname),
+    avatarUrl: profile.value.avatarUrl,
+  })
+  return
+}
 
-  profileAuthLoading.value = true
-  try {
-    const result = await ensureBackendUser({
-      nickname: normalizeNickname(profileNicknameDraft.value || profile.value.nickname),
-      avatarUrl: profile.value.avatarUrl,
-    })
-    if (!result.user) {
-      throw new Error('账号创建失败，请稍后重试')
-    }
-    saveBackendAndLocalProfile(result.user)
-    profileNicknameDraft.value = result.user.nickname || DEFAULT_NICKNAME
-
-    uni.showToast({
-      title: result.isNew ? '账号已启用' : '账号已连接',
-      icon: 'success',
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    const title = message.length > 15 ? '账号启用失败，请重试' : message || '账号启用失败，请重试'
-    uni.showToast({
-      title,
-      icon: 'none',
-    })
-  } finally {
-    profileAuthLoading.value = false
-  }
+function handleProfileNameTap() {
+  if (!isGuestProfile.value || profileAuthLoading.value || profileUpdating.value) return
+  openAuthDialog({
+    nickname: normalizeNickname(profileNicknameDraft.value || profile.value.nickname),
+    avatarUrl: profile.value.avatarUrl,
+  })
 }
 
 async function handleAvatarChosen(localAvatarPath: string) {
@@ -954,8 +1201,11 @@ async function handleAvatarChosen(localAvatarPath: string) {
 async function handleAvatarTrigger() {
   if (profileUpdating.value || profileAuthLoading.value) return
   if (isGuestProfile.value) {
-    await handleProfileCardTap()
-    if (isGuestProfile.value) return
+    openAuthDialog({
+      nickname: normalizeNickname(profileNicknameDraft.value || profile.value.nickname),
+      avatarUrl: profile.value.avatarUrl,
+    })
+    return
   }
 
   try {
@@ -974,7 +1224,10 @@ async function handleAvatarTrigger() {
 async function handleNicknameFocus() {
   if (profileUpdating.value || profileAuthLoading.value) return
   if (!isGuestProfile.value) return
-  await handleProfileCardTap()
+  openAuthDialog({
+    nickname: normalizeNickname(profileNicknameDraft.value || profile.value.nickname),
+    avatarUrl: profile.value.avatarUrl,
+  })
 }
 
 async function handleNicknameBlur() {
@@ -1017,6 +1270,35 @@ async function handleNicknameBlur() {
   } finally {
     profileUpdating.value = false
   }
+}
+
+async function handleLogout() {
+  if (profileUpdating.value || profileAuthLoading.value || isGuestProfile.value) return
+
+  const modal = await uni.showModal({
+    title: '退出登录',
+    content: '确认退出当前账号？退出后将回到游客模式。',
+    confirmText: '退出',
+    confirmColor: '#D64545',
+    cancelText: '取消',
+  })
+  if (!modal.confirm) return
+
+  clearBackendAuthState()
+  setManualAuthEnabled(false)
+  backendAuthState.value = null
+  authDialogSeed.value = null
+  showAuthDialog.value = false
+  saveLocalUserProfile({
+    avatarUrl: '',
+    nickname: DEFAULT_NICKNAME,
+  })
+  profileNicknameDraft.value = ''
+
+  uni.showToast({
+    title: '已退出登录',
+    icon: 'none',
+  })
 }
 
 function saveProviderConfig(showToast = false) {
@@ -1944,6 +2226,13 @@ function onProfileTitleDecoError() {
   gap: 0;
 }
 
+.profile-login-title {
+  font-size: 34rpx;
+  line-height: 1.2;
+  font-weight: 600;
+  color: #1A1A1A;
+}
+
 .profile-nickname-input {
   min-width: 0;
   flex: 1;
@@ -2470,4 +2759,165 @@ function onProfileTitleDecoError() {
   justify-content: center;
 }
 
+.auth-action-panel {
+  margin-top: 32rpx;
+  margin-bottom: 8rpx;
+  padding: 28rpx 32rpx;
+}
+
+.logout-btn {
+  width: 100%;
+  min-height: 78rpx;
+  border-radius: 14rpx;
+  border: 1rpx solid #E8EAED;
+  background: #FFFFFF;
+  color: #D64545;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.logout-btn[disabled] {
+  opacity: 0.6;
+}
+
+.logout-btn-hover {
+  opacity: 0.88;
+}
+
+.logout-hint {
+  display: block;
+  margin-top: 16rpx;
+  text-align: center;
+  font-size: 22rpx;
+  line-height: 1.45;
+  color: #9AA0A6;
+}
+
+.auth-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(18, 18, 18, 0.48);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 40rpx;
+}
+
+.auth-dialog-card {
+  width: 100%;
+  max-width: 520rpx;
+  padding: 40rpx;
+  border-radius: 32rpx;
+  background: #ffffff;
+  box-shadow: 0 30rpx 60rpx rgba(0, 0, 0, 0.12);
+  text-align: center;
+}
+
+.auth-dialog-title {
+  font-size: 34rpx;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #1A1A1A;
+  margin-bottom: 24rpx;
+}
+
+.auth-dialog-form {
+  width: 100%;
+  text-align: left;
+  margin-bottom: 24rpx;
+}
+
+.auth-dialog-field-label {
+  display: block;
+  margin-bottom: 10rpx;
+  font-size: 22rpx;
+  line-height: 1.4;
+  color: #70757A;
+}
+
+.auth-dialog-input {
+  width: 100%;
+  min-height: 74rpx;
+  padding: 0 20rpx;
+  border: 1rpx solid #E8EAED;
+  border-radius: 14rpx;
+  background: #FAFAFA;
+  color: #1A1A1A;
+  font-size: 26rpx;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+
+.auth-dialog-description {
+  font-size: 26rpx;
+  line-height: 1.5;
+  color: #555555;
+  margin-bottom: 32rpx;
+}
+
+.auth-dialog-cta {
+  width: 100%;
+  min-height: 74rpx;
+  border-radius: 18rpx;
+  border: 1rpx solid #07C160;
+  background: #07C160;
+  color: #ffffff;
+  font-size: 28rpx;
+  font-weight: 600;
+  margin-bottom: 18rpx;
+}
+
+.auth-dialog-cta.secondary {
+  border-color: #E8EAED;
+  background: #F8F9FA;
+  color: #5B5B5B;
+}
+
+.auth-dialog-cta.is-loading {
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.auth-dialog-switch-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  column-gap: 6rpx;
+  margin-top: 6rpx;
+}
+
+.auth-dialog-switch-prefix {
+  font-size: 22rpx;
+  color: #8A8F96;
+  line-height: 1.5;
+}
+
+.auth-dialog-switch-action {
+  font-size: 26rpx;
+  font-weight: 700;
+  color: #07C160;
+  line-height: 1.4;
+}
+
+.auth-dialog-hint {
+  font-size: 22rpx;
+  color: #7C7C7C;
+  margin-top: 4rpx;
+}
+
+.dialog-fade-enter-active,
+.dialog-fade-leave-active {
+  transition: opacity 200ms ease;
+}
+
+.dialog-fade-enter-from,
+.dialog-fade-leave-to {
+  opacity: 0;
+}
+
 </style>
+
+
+
+
