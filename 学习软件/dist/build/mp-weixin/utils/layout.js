@@ -1,0 +1,1 @@
+"use strict";const t=require("../common/vendor.js");exports.resolveStatusBarTopPadding=function(){try{const e=t.index.getSystemInfoSync?t.index.getSystemInfoSync():null,n=Number((null==e?void 0:e.statusBarHeight)||0);if(Number.isFinite(n)&&n>0)return Math.round(n)}catch{}return 24};

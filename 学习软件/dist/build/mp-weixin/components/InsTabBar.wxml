@@ -1,0 +1,1 @@
+<view class="oa-tab-wrap data-v-d23168a7"><view class="oa-tab-shell data-v-d23168a7"><view wx:for="{{a}}" wx:for-item="item" wx:key="c" class="{{['oa-tab-item', 'data-v-d23168a7', item.d]}}" bindtap="{{item.e}}"><view class="{{['oa-tab-icon', 'data-v-d23168a7', item.a]}}"></view><text class="oa-tab-label data-v-d23168a7">{{item.b}}</text></view></view></view>

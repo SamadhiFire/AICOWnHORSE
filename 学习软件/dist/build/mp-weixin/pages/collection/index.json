@@ -1,0 +1,6 @@
+{
+  "navigationStyle": "custom",
+  "usingComponents": {
+    "ins-tab-bar": "../../components/InsTabBar"
+  }
+}
