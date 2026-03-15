@@ -1,4 +1,6 @@
-const DEFAULT_API_BASE_URL = 'http://localhost:3000'
+const API_BASE_URL_STORAGE_KEY = 'study_api_base_url_v1'
+// 指向你的本地后端服务 (如果你的后端路由没有 /api/v1 前缀，请改为 'http://localhost:3000')
+const DEFAULT_API_BASE_URL = 'https://upwxyxlondgv.sealosbja.site/api/v1'
 
 export interface ApiEnvelope<TData = unknown> {
   code?: number
@@ -43,6 +45,14 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '')
 }
 
+function resolveStoredApiBaseUrl(): string {
+  try {
+    return trimTrailingSlash(String(uni.getStorageSync(API_BASE_URL_STORAGE_KEY) || '').trim())
+  } catch {
+    return ''
+  }
+}
+
 function resolveEnvApiBaseUrl(): string {
   try {
     const env = (import.meta as unknown as { env?: Record<string, unknown> }).env
@@ -53,8 +63,9 @@ function resolveEnvApiBaseUrl(): string {
 }
 
 export function resolveApiBaseUrl(): string {
+  const fromStorage = resolveStoredApiBaseUrl()
   const fromEnv = resolveEnvApiBaseUrl()
-  return fromEnv || DEFAULT_API_BASE_URL
+  return fromStorage || fromEnv || DEFAULT_API_BASE_URL
 }
 
 function buildUrl(path: string): string {
@@ -101,6 +112,11 @@ function buildHeaders(
   return headers
 }
 
+function hasHeaderName(headers: Record<string, string>, headerName: string): boolean {
+  const target = headerName.toLowerCase()
+  return Object.keys(headers).some((key) => key.toLowerCase() === target)
+}
+
 export async function apiRequest<TData = unknown>(
   options: ApiRequestOptions,
 ): Promise<TData> {
@@ -112,6 +128,16 @@ export async function apiRequest<TData = unknown>(
     timeout = 20000,
     headers,
   } = options
+  const normalizedMethod = String(method || 'GET').trim().toUpperCase()
+  const requestHeaders = buildHeaders(token, headers)
+  const shouldAttachJsonContentType = normalizedMethod !== 'GET'
+    && normalizedMethod !== 'HEAD'
+    && data !== undefined
+    && data !== null
+
+  if (shouldAttachJsonContentType && !hasHeaderName(requestHeaders, 'Content-Type')) {
+    requestHeaders['Content-Type'] = 'application/json'
+  }
 
   const response = await new Promise<UniApp.RequestSuccessCallbackResult>((resolve, reject) => {
     uni.request({
@@ -119,10 +145,7 @@ export async function apiRequest<TData = unknown>(
       method: method as never,
       data: data as never,
       timeout,
-      header: {
-        'Content-Type': 'application/json',
-        ...buildHeaders(token, headers),
-      },
+      header: requestHeaders,
       success: (result) => resolve(result),
       fail: (error) => reject(error),
     })

@@ -101,6 +101,7 @@ async function requestWithAuth<TData>(
     path: string
     method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
     data?: unknown
+    timeout?: number
   },
   allowRefresh = true,
 ): Promise<TData | null> {
@@ -383,6 +384,7 @@ export async function createQuestionsGenerationJobInBackend(payload: {
     path: '/questions/generate',
     method: 'POST',
     data: payload,
+    timeout: 600000,
   })
 }
 
@@ -432,6 +434,7 @@ export async function triggerGenerationBatchInBackend(
   return requestWithAuth({
     path: `/generation-jobs/${encodeURIComponent(jobId)}/batches/${batchIndex}`,
     method: 'POST',
+    timeout: 600000,
   })
 }
 

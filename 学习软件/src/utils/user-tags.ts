@@ -3,9 +3,12 @@ import { fetchUserTagsFromBackend, syncUserTagsToBackend } from './backend-sync'
 const USER_TAGS_KEY = 'study_quiz_user_tags_v1'
 const USER_TAGS_COMPAT_KEY = 'user_tags'
 const MAX_USER_TAGS = 7
+const BACKEND_HYDRATE_COOLDOWN_MS = 5000
 export const USER_TAGS_CHANGED_EVENT = 'study_user_tags_changed'
 let backendSyncingTags = false
 let pendingBackendTags: string[] | null = null
+let pendingUserTagsHydrationPromise: Promise<boolean> | null = null
+let lastUserTagsHydrationAt = 0
 const TAG_SIGNATURE_STRIP_PATTERN = /[\s`~!@#$%^&*()\-_=+\[\]{}\\|;:'",.<>/?·！￥…（）—【】、；：‘’“”，。《》？]/g
 
 function normalizeTag(raw: unknown): string {
@@ -124,17 +127,33 @@ function flushUserTagsBackendSync(): void {
 }
 
 export async function hydrateUserTagsFromBackend(): Promise<boolean> {
-  try {
-    const backendTags = await fetchUserTagsFromBackend()
-    if (!Array.isArray(backendTags)) return false
+  if (pendingUserTagsHydrationPromise) {
+    return pendingUserTagsHydrationPromise
+  }
 
-    const next = uniqueTags(backendTags)
-    if (next.length === 0) return false
-
-    writeUserTagsStorage(next)
-    uni.removeStorageSync(USER_TAGS_COMPAT_KEY)
-    return true
-  } catch {
+  const now = Date.now()
+  if (lastUserTagsHydrationAt > 0 && now - lastUserTagsHydrationAt < BACKEND_HYDRATE_COOLDOWN_MS) {
     return false
   }
+
+  pendingUserTagsHydrationPromise = (async () => {
+    try {
+      const backendTags = await fetchUserTagsFromBackend()
+      lastUserTagsHydrationAt = Date.now()
+      if (!Array.isArray(backendTags)) return false
+
+      const next = uniqueTags(backendTags)
+      if (next.length === 0) return false
+
+      writeUserTagsStorage(next)
+      uni.removeStorageSync(USER_TAGS_COMPAT_KEY)
+      return true
+    } catch {
+      return false
+    }
+  })().finally(() => {
+    pendingUserTagsHydrationPromise = null
+  })
+
+  return pendingUserTagsHydrationPromise
 }

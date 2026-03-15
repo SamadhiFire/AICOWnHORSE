@@ -36,7 +36,24 @@
         </view>
       </view>
 
-      <text class="work-status-text">AI牛马正在为你干活，请稍候...</text>
+      <view class="work-status-swiper-wrap work-block-gap" :style="{ height: `${STATUS_LINE_HEIGHT_RPX}rpx` }">
+        <swiper
+          class="work-status-swiper"
+          :style="{ height: `${STATUS_LINE_HEIGHT_RPX}rpx` }"
+          :vertical="true"
+          :autoplay="true"
+          :circular="true"
+          :interval="2200"
+          :duration="280"
+          :disable-touch="true"
+        >
+          <swiper-item v-for="(message, index) in statusMessages" :key="`status-${index}`">
+            <view class="work-status-item" :style="{ height: `${STATUS_LINE_HEIGHT_RPX}rpx` }">
+              <text class="work-status-text">{{ message }}</text>
+            </view>
+          </swiper-item>
+        </swiper>
+      </view>
 
       <button class="work-cancel-btn work-block-gap" hover-class="work-cancel-btn-hover" @click.stop="emitCancel">
         取消生成
@@ -48,7 +65,40 @@
 <script setup lang="ts">
 const COW_SRC = '/static/cowpngpng.png'
 const HORSE_SRC = '/static/horsepngpng.png'
+const STATUS_LINE_HEIGHT_RPX = 46
 const queueAnimals = ['cow', 'horse', 'cow', 'horse', 'cow', 'horse', 'cow', 'horse'] as const
+const statusMessages = [
+  'AI牛马正在为你干活，请稍候...',
+  'AI牛马正在加班搬砖，请稍候...',
+  'AI牛马正在翻资料找答案，请稍候...',
+  'AI牛马正在梳理重点，请稍候...',
+  'AI牛马正在打磨题目质量，请稍候...',
+  'AI牛马正在核对知识点，请稍候...',
+  'AI牛马正在排查易错点，请稍候...',
+  'AI牛马正在压缩废话，请稍候...',
+  'AI牛马正在补充高频考点，请稍候...',
+  'AI牛马正在优化题目顺序，请稍候...',
+  'AI牛马正在调校难度梯度，请稍候...',
+  'AI牛马正在生成标准解析，请稍候...',
+  'AI牛马正在校验选项干扰度，请稍候...',
+  'AI牛马正在比对最新规则，请稍候...',
+  'AI牛马正在清洗噪声信息，请稍候...',
+  'AI牛马正在为你精选真题风格，请稍候...',
+  'AI牛马正在提炼核心概念，请稍候...',
+  'AI牛马正在给你攒一套好题，请稍候...',
+  'AI牛马正在补齐知识盲区，请稍候...',
+  'AI牛马正在重排训练节奏，请稍候...',
+  'AI牛马正在打包你的专属题集，请稍候...',
+  'AI牛马正在检查答案一致性，请稍候...',
+  'AI牛马正在增强题目区分度，请稍候...',
+  'AI牛马正在对齐你的学习目标，请稍候...',
+  'AI牛马正在准备下一轮冲刺，请稍候...',
+  'AI牛马正在追着截止时间狂奔，请稍候...',
+  'AI牛马正在全速推理中，请稍候...',
+  'AI牛马正在为你冲业绩，请稍候...',
+  'AI牛马正在做最后质检，请稍候...',
+  'AI牛马马上交付结果，请稍候...',
+] as const
 
 const emit = defineEmits<{
   (event: 'cancel'): void
@@ -136,12 +186,36 @@ function emitCancel() {
   height: 84rpx;
 }
 
+.work-status-swiper-wrap {
+  width: 100%;
+  height: 46rpx;
+  overflow: hidden;
+}
+
+.work-status-swiper {
+  width: 100%;
+  height: 46rpx;
+}
+
+.work-status-item {
+  width: 100%;
+  height: 46rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .work-status-text {
-  margin-top: 24rpx;
+  display: block;
+  width: 100%;
   color: #07C160;
   font-size: 28rpx;
-  line-height: 1.5;
+  line-height: 1.3;
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
   animation: thinkingBreath 1.8s ease-in-out infinite;
 }
 
@@ -149,6 +223,7 @@ function emitCancel() {
   width: 100%;
   min-height: 80rpx;
   margin: 0;
+  padding: 0;
   border: 0;
   border-radius: 16rpx;
   background: transparent;
@@ -159,6 +234,10 @@ function emitCancel() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.work-cancel-btn::after {
+  border: 0 !important;
 }
 
 .work-cancel-btn-hover {

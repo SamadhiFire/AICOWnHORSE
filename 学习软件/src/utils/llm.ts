@@ -80,6 +80,7 @@ const LLM_MAX_OUTPUT_TOKENS = 4096
 const LLM_MIN_OUTPUT_TOKENS = 256
 const LLM_DEFAULT_TEMPERATURE = 0.3
 const API_KEY_CHECK_TIMEOUT_MS = 12000
+const BACKEND_HYDRATE_COOLDOWN_MS = 5000
 
 interface UniRequestSuccess<TData = unknown> {
   statusCode: number
@@ -111,6 +112,8 @@ type ProviderValidationRecord = {
 }
 
 let backendSyncingLlmConfig = false
+let pendingLlmConfigHydrationPromise: Promise<boolean> | null = null
+let lastLlmConfigHydrationAt = 0
 type LlmBackendSyncPayload = {
   provider: string
   apiKey: string
@@ -389,31 +392,47 @@ export function saveLlmConfig(config: LlmConfig): void {
 }
 
 export async function hydrateLlmConfigFromBackend(): Promise<boolean> {
-  const backendConfig = await fetchLlmConfigFromBackend()
-  if (!backendConfig) return false
-
-  const providerRaw = String(backendConfig.provider || '').trim().toLowerCase()
-  const provider = BACKEND_PROVIDER_LIST.has(providerRaw as LlmProvider)
-    ? (providerRaw as LlmProvider)
-    : 'deepseek'
-
-  const mergedManaged = {
-    qwen: String(backendConfig.managedKeys?.qwen || '').trim(),
-    deepseek: String(backendConfig.managedKeys?.deepseek || '').trim(),
-    openai: String(backendConfig.managedKeys?.openai || '').trim(),
-    gemini: String(backendConfig.managedKeys?.gemini || '').trim(),
+  if (pendingLlmConfigHydrationPromise) {
+    return pendingLlmConfigHydrationPromise
   }
-  uni.setStorageSync(MANAGED_KEY_STORAGE, mergedManaged)
 
-  const preset = PROVIDER_PRESETS[provider]
-  const nextConfig: LlmConfig = {
-    provider,
-    apiKey: String(backendConfig.apiKey || '').trim(),
-    baseUrl: String(backendConfig.baseUrl || preset.baseUrl).trim() || preset.baseUrl,
-    model: String(backendConfig.model || preset.model).trim() || preset.model,
+  const now = Date.now()
+  if (lastLlmConfigHydrationAt > 0 && now - lastLlmConfigHydrationAt < BACKEND_HYDRATE_COOLDOWN_MS) {
+    return false
   }
-  uni.setStorageSync(STORAGE_KEY, nextConfig)
-  return true
+
+  pendingLlmConfigHydrationPromise = (async () => {
+    const backendConfig = await fetchLlmConfigFromBackend()
+    lastLlmConfigHydrationAt = Date.now()
+    if (!backendConfig) return false
+
+    const providerRaw = String(backendConfig.provider || '').trim().toLowerCase()
+    const provider = BACKEND_PROVIDER_LIST.has(providerRaw as LlmProvider)
+      ? (providerRaw as LlmProvider)
+      : 'deepseek'
+
+    const mergedManaged = {
+      qwen: String(backendConfig.managedKeys?.qwen || '').trim(),
+      deepseek: String(backendConfig.managedKeys?.deepseek || '').trim(),
+      openai: String(backendConfig.managedKeys?.openai || '').trim(),
+      gemini: String(backendConfig.managedKeys?.gemini || '').trim(),
+    }
+    uni.setStorageSync(MANAGED_KEY_STORAGE, mergedManaged)
+
+    const preset = PROVIDER_PRESETS[provider]
+    const nextConfig: LlmConfig = {
+      provider,
+      apiKey: String(backendConfig.apiKey || '').trim(),
+      baseUrl: String(backendConfig.baseUrl || preset.baseUrl).trim() || preset.baseUrl,
+      model: String(backendConfig.model || preset.model).trim() || preset.model,
+    }
+    uni.setStorageSync(STORAGE_KEY, nextConfig)
+    return true
+  })().finally(() => {
+    pendingLlmConfigHydrationPromise = null
+  })
+
+  return pendingLlmConfigHydrationPromise
 }
 
 export function hasLlmConfig(config?: Partial<LlmConfig>): boolean {

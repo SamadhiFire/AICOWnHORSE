@@ -58,7 +58,7 @@
             <view class="answer-panel" :class="questionResult(currentQuestion.id)?.correct ? 'is-ok' : 'is-bad'">
               <view class="answer-line">你的答案：{{ showEmpty(questionResult(currentQuestion.id)?.user) }}</view>
               <view class="answer-line">正确答案：{{ showEmpty(questionResult(currentQuestion.id)?.expected) }}</view>
-            </view>
+          </view>
             <view v-if="currentQuestion.explanation" class="oa-item-text oa-break">解析：{{ currentQuestion.explanation }}</view>
           </view>
         </view>
@@ -83,6 +83,9 @@
               </button>
               <button v-else-if="submitted" class="oa-btn oa-btn-small action-btn action-btn-primary" hover-class="oa-btn-hover" @click="backToGenerate">
                 返回刷题页
+              </button>
+              <button v-else-if="allGradedButNotSubmitted" class="oa-btn oa-btn-small action-btn action-btn-primary" hover-class="oa-btn-hover" @click="finalizeInstantFeedback">
+                查看结果
               </button>
               <button v-else class="oa-btn oa-btn-small action-btn action-btn-primary" disabled>即时反馈中</button>
             </view>
@@ -166,6 +169,9 @@ const activeSessionId = ref('')
 const generationJob = ref<GenerationJob | null>(null)
 const sessionHeaderTopPx = ref(64)
 const sessionFixedHeightPx = ref(220)
+const isMounted = ref(true)
+let stopWatchCurrentIndex: () => void
+let stopWatchMultiple: () => void
 const sessionHeaderStyle = computed(() => ({
   paddingTop: `${sessionHeaderTopPx.value}px`,
 }))
@@ -258,16 +264,19 @@ onShow(() => {
 })
 
 onUnload(() => {
+  isMounted.value = false
+  stopWatchCurrentIndex?.()
+  stopWatchMultiple?.()
   uni.$off(PRACTICE_SESSION_UPDATED_EVENT, handlePracticeSessionUpdated)
   uni.$off(GENERATION_JOB_UPDATED_EVENT, handleGenerationJobUpdated)
 })
 
-watch(currentIndex, () => {
+stopWatchCurrentIndex = watch(currentIndex, () => {
   maybeTriggerBackgroundBatches()
   syncSessionFixedHeight()
 })
 
-watch(
+stopWatchMultiple = watch(
   [
     () => loadError.value,
     () => generationHintText.value,
@@ -500,8 +509,10 @@ function resolveSessionFixedFallbackHeight(topPx: number): number {
 function syncSessionFixedHeight() {
   const fallbackHeight = resolveSessionFixedFallbackHeight(sessionHeaderTopPx.value)
   nextTick(() => {
+    if (!isMounted.value) return
     const query = uni.createSelectorQuery()
     query.select('.session-fixed-shell').boundingClientRect((rect) => {
+      if (!isMounted.value) return
       const node = Array.isArray(rect) ? rect[0] : rect
       const measuredHeight = Math.round(Number(node?.height || 0))
       sessionFixedHeightPx.value = measuredHeight > 0 ? measuredHeight : fallbackHeight
@@ -532,6 +543,27 @@ function setAnswer(value: string): void {
   }
 }
 
+const allGradedButNotSubmitted = computed(() =>
+  isInstantFeedback.value
+  && !submitted.value
+  && questionCount.value > 0
+  && Object.keys(grading.value).length >= questionCount.value,
+)
+
+function finalizeInstantFeedback(): void {
+  if (submitted.value) return
+  submitted.value = true
+  if (activeSessionId.value) {
+    cancelGenerationJob(activeSessionId.value)
+  }
+  clearActivePracticeSession()
+  const correctCount = Object.values(grading.value).filter((item) => item.correct).length
+  uni.showToast({
+    title: `得分 ${correctCount}/${questionCount.value}`,
+    icon: 'none',
+  })
+}
+
 function gradeAndLockQuestion(question: StoredQuestion): void {
   if (grading.value[question.id]) return
 
@@ -548,7 +580,7 @@ function gradeAndLockQuestion(question: StoredQuestion): void {
     // ignore backend attempt failure
   })
 
-  if (Object.keys(next).length >= questionCount.value) {
+  if (!isInstantFeedback.value && Object.keys(next).length >= questionCount.value) {
     submitted.value = true
     if (activeSessionId.value) {
       cancelGenerationJob(activeSessionId.value)

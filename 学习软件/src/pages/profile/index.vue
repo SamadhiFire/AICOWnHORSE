@@ -27,17 +27,25 @@
           <view class="profile-main">
             <view class="profile-name-row" @click.stop="handleProfileNameTap">
               <text v-if="isGuestProfile" class="profile-login-title">点击登录 / 注册</text>
-              <input
-                v-else
-                v-model="profileNicknameDraft"
-                class="profile-nickname-input"
-                type="text"
-                maxlength="32"
-                placeholder="点击设置昵称"
-                placeholder-style="color:#BDBDBD;"
-                @focus="handleNicknameFocus"
-                @blur="handleNicknameBlur"
-              />
+              <template v-else>
+                <view v-if="!isNicknameEditing" class="profile-nickname-display">
+                  <text class="profile-nickname-text">{{ profileNicknameDisplay }}</text>
+                  <view class="profile-nickname-edit-dot" @click.stop="startNicknameEditing" />
+                </view>
+                <input
+                  v-else
+                  v-model="profileNicknameDraft"
+                  class="profile-nickname-input"
+                  type="text"
+                  maxlength="32"
+                  :focus="profileNicknameInputFocus"
+                  placeholder="点击设置昵称"
+                  placeholder-style="color:#BDBDBD;"
+                  @focus="handleNicknameFocus"
+                  @blur="handleNicknameBlur"
+                  @confirm="confirmNicknameEdit"
+                />
+              </template>
             </view>
             <text v-if="isGuestProfile" class="profile-login-tip">点击登录 / 注册，立即同步账号与练习进度</text>
           </view>
@@ -258,15 +266,16 @@
               @confirm="confirmAuthDialog"
             />
           </view>
-          <view class="auth-dialog-form">
-            <text class="auth-dialog-field-label">昵称（可选）</text>
+          <view v-if="authDialogMode === 'register'" class="auth-dialog-form">
+            <text class="auth-dialog-field-label">确认密码</text>
             <input
-              v-model="authDialogNicknameDraft"
+              v-model="authDialogConfirmPasswordDraft"
               class="auth-dialog-input"
               type="text"
-              maxlength="32"
+              :password="true"
+              maxlength="64"
               :disabled="profileAuthLoading"
-              placeholder="请输入昵称（可选）"
+              placeholder="请再次输入密码"
               placeholder-style="color:#A7A7A7;"
               @confirm="confirmAuthDialog"
             />
@@ -332,6 +341,7 @@ import {
   retagHistoricalQuestionsInBackend,
 } from '../../utils/backend-sync'
 import { loginWithCredential, registerWithCredential, uploadAvatarFile } from '../../utils/account'
+import { BackendApiError } from '../../utils/backend-api'
 import {
   clearBackendAuthState,
   ensureBackendAccount,
@@ -397,6 +407,8 @@ const retagLoading = ref(false)
 const profileAuthLoading = ref(false)
 const profileUpdating = ref(false)
 const profileNicknameDraft = ref('')
+const isNicknameEditing = ref(false)
+const profileNicknameInputFocus = ref(false)
 const manualAuthEnabled = ref(loadManualAuthEnabled())
 const backendAuthState = ref<BackendAuthState | null>(loadBackendAuthState())
 const guideGenerateHighlight = ref(false)
@@ -419,7 +431,7 @@ const authDialogSeed = ref<{ nickname?: string; avatarUrl?: string } | null>(nul
 const authDialogMode = ref<'login' | 'register'>('login')
 const authDialogAccountDraft = ref('')
 const authDialogPasswordDraft = ref('')
-const authDialogNicknameDraft = ref('')
+const authDialogConfirmPasswordDraft = ref('')
 
 type GenerateGoalTagsOptions = {
   regenerate?: boolean
@@ -465,6 +477,7 @@ const nicknameInitial = computed(() => {
   if (!nick) return '我'
   return nick.slice(0, 1)
 })
+const profileNicknameDisplay = computed(() => normalizeNickname(profileNicknameDraft.value || profile.value.nickname))
 
 const maskedProviderKey = computed(() => {
   const key = String(savedProviderKey.value || '').trim()
@@ -808,14 +821,14 @@ function openAuthDialog(seed?: { nickname?: string; avatarUrl?: string }) {
   authDialogMode.value = 'login'
   authDialogAccountDraft.value = ''
   authDialogPasswordDraft.value = ''
-  const seededNickname = normalizeNickname(seed?.nickname || profileNicknameDraft.value || profile.value.nickname)
-  authDialogNicknameDraft.value = seededNickname === DEFAULT_NICKNAME ? '' : seededNickname
+  authDialogConfirmPasswordDraft.value = ''
   showAuthDialog.value = true
 }
 
 function switchToRegisterMode() {
   if (profileAuthLoading.value) return
   authDialogMode.value = 'register'
+  authDialogConfirmPasswordDraft.value = ''
 }
 
 function closeAuthDialog() {
@@ -823,7 +836,33 @@ function closeAuthDialog() {
   authDialogMode.value = 'login'
   authDialogAccountDraft.value = ''
   authDialogPasswordDraft.value = ''
-  authDialogNicknameDraft.value = ''
+  authDialogConfirmPasswordDraft.value = ''
+}
+
+function startNicknameEditing() {
+  if (isGuestProfile.value || profileUpdating.value || profileAuthLoading.value) return
+  profileNicknameDraft.value = normalizeNickname(profileNicknameDraft.value || profile.value.nickname)
+  isNicknameEditing.value = true
+  nextTick(() => {
+    profileNicknameInputFocus.value = true
+  })
+}
+
+function stopNicknameEditing() {
+  profileNicknameInputFocus.value = false
+  isNicknameEditing.value = false
+}
+
+function confirmNicknameEdit() {
+  profileNicknameInputFocus.value = false
+}
+
+function resolveCredentialAuthError(error: unknown, mode: 'login' | 'register'): string {
+  if (error instanceof BackendApiError && (error.statusCode === 404 || error.code === 40400)) {
+    return '后端未开通登录注册接口'
+  }
+  if (error instanceof Error && error.message) return error.message
+  return mode === 'register' ? '注册失败，请重试' : '登录失败，请重试'
 }
 
 async function performProfileAuth(
@@ -880,7 +919,12 @@ async function performProfileAuth(
     })
     return result
   } catch (error) {
-    const message = error instanceof Error ? error.message : '登录失败'
+    if (credentialPayload) {
+      showAuthDialog.value = true
+    }
+    const message = credentialPayload
+      ? resolveCredentialAuthError(error, credentialPayload.mode)
+      : (error instanceof Error ? error.message : '登录失败')
     uni.showToast({
       title: message.length > 15 ? '登录失败，请重试' : message,
       icon: 'none',
@@ -922,12 +966,28 @@ async function confirmAuthDialog() {
     })
     return
   }
+  if (authDialogMode.value === 'register') {
+    const confirmPassword = String(authDialogConfirmPasswordDraft.value || '').trim()
+    if (!confirmPassword) {
+      uni.showToast({
+        title: '请再次输入密码',
+        icon: 'none',
+      })
+      return
+    }
+    if (confirmPassword !== password) {
+      uni.showToast({
+        title: '两次密码不一致',
+        icon: 'none',
+      })
+      return
+    }
+  }
 
   const seed = authDialogSeed.value || {}
-  const nickname = normalizeNickname(authDialogNicknameDraft.value || seed.nickname || profile.value.nickname)
   await performProfileAuth({
     ...seed,
-    nickname,
+    nickname: normalizeNickname(seed.nickname || profile.value.nickname),
   }, {
     mode: authDialogMode.value,
     account,
@@ -937,7 +997,7 @@ async function confirmAuthDialog() {
   authDialogMode.value = 'login'
   authDialogAccountDraft.value = ''
   authDialogPasswordDraft.value = ''
-  authDialogNicknameDraft.value = ''
+  authDialogConfirmPasswordDraft.value = ''
 }
 
 async function chooseAvatarImage(): Promise<string> {
@@ -1065,6 +1125,7 @@ function syncFixedHeaderHeight() {
 }
 
 onShow(() => {
+  stopNicknameEditing()
   safeTopPx.value = resolveStatusBarTopPadding()
   syncFixedHeaderHeight()
   loadConfig()
@@ -1235,12 +1296,16 @@ async function handleNicknameBlur() {
 
   if (isGuestProfile.value) {
     profileNicknameDraft.value = String(profileNicknameDraft.value || '').replace(/\s+/g, ' ').trim().slice(0, 32)
+    stopNicknameEditing()
     return
   }
 
   const nickname = normalizeNickname(profileNicknameDraft.value)
   profileNicknameDraft.value = nickname
-  if (nickname === normalizeNickname(profile.value.nickname)) return
+  if (nickname === normalizeNickname(profile.value.nickname)) {
+    stopNicknameEditing()
+    return
+  }
 
   profileUpdating.value = true
 
@@ -1269,6 +1334,7 @@ async function handleNicknameBlur() {
     })
   } finally {
     profileUpdating.value = false
+    stopNicknameEditing()
   }
 }
 
@@ -1294,6 +1360,7 @@ async function handleLogout() {
     nickname: DEFAULT_NICKNAME,
   })
   profileNicknameDraft.value = ''
+  stopNicknameEditing()
 
   uni.showToast({
     title: '已退出登录',
@@ -2223,7 +2290,7 @@ function onProfileTitleDecoError() {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 0;
+  gap: 10rpx;
 }
 
 .profile-login-title {
@@ -2246,6 +2313,30 @@ function onProfileTitleDecoError() {
   line-height: 44rpx;
   font-weight: 500;
   color: #1A1A1A;
+}
+
+.profile-nickname-display {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  column-gap: 12rpx;
+}
+
+.profile-nickname-text {
+  max-width: 380rpx;
+  font-size: 32rpx;
+  line-height: 1.35;
+  font-weight: 500;
+  color: #1A1A1A;
+}
+
+.profile-nickname-edit-dot {
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  background: #07C160;
+  opacity: 0.62;
+  flex: 0 0 16rpx;
 }
 
 .profile-login-tip {

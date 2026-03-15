@@ -3,11 +3,7 @@ import {
   createGenerationJobAfterInitial,
   replaceGenerationJob,
 } from '../utils/generation-job'
-import { runPipeline } from '../utils/pipeline'
 import {
-  addGeneratedQuestions,
-  buildQuestionSignature,
-  loadQuestionBank,
   type PracticeMode,
   upsertStoredQuestions,
 } from '../utils/question-bank'
@@ -17,7 +13,8 @@ import {
   type PracticeFeedbackMode,
 } from '../utils/practice-session'
 import { abortAllLlmRequests } from '../utils/llm'
-import { requestInitialGenerationFromPreferredSource } from './practice-generation-source-service'
+import { createQuestionsGenerationJobInBackend } from '../utils/backend-sync'
+import { BackendApiError } from '../utils/backend-api'
 
 export interface StartPracticeGenerationInput {
   material: string
@@ -48,12 +45,19 @@ export type StartPracticeGenerationResult =
     }
 
 const GENERATE_FAIL_MESSAGE = '生成失败，请稍后重试'
+const GENERATE_TIMEOUT_MESSAGE = '生成超时，请检查网络或 API 配置后重试'
+const GENERATE_INVALID_SESSION_MESSAGE = '生成结果缺少有效练习会话，请重试'
 
-function resolveInitialGenerationTemperature(requestNonce: number): number {
-  const nonce = Math.max(0, Math.floor(Number(requestNonce || 0)))
-  const step = nonce % 4
-  return 0.46 + step * 0.03
+function isDevRuntime(): boolean {
+  try {
+    const env = (import.meta as unknown as { env?: Record<string, unknown> }).env
+    return Boolean(env?.DEV)
+  } catch {
+    return false
+  }
 }
+
+
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -98,9 +102,8 @@ export async function startPracticeGeneration(
 ): Promise<StartPracticeGenerationResult> {
   clearGenerationJob()
   try {
-    const initialGenerationSeed = `initial_${Date.now()}_${input.requestNonce}`
-    const sourceResult = await requestInitialGenerationFromPreferredSource(
-      {
+    const backendResult = await withTimeout(
+      createQuestionsGenerationJobInBackend({
         material: input.material,
         type: input.type,
         difficulty: input.difficulty,
@@ -110,113 +113,65 @@ export async function startPracticeGeneration(
         initialBatchCount: input.initialBatchCount,
         userTags: input.userTags,
         requestNonce: input.requestNonce,
-      },
-      async () => {
-        const excludedSignatures = [...new Set(
-          loadQuestionBank()
-            .map((item) => buildQuestionSignature(item))
-            .filter(Boolean),
-        )]
-
-        return withTimeout(
-          runPipeline(
-            input.material,
-            input.type,
-            input.initialBatchCount,
-            input.difficulty,
-            input.mode,
-            input.userTags,
-            {
-              skipResultCache: true,
-              cacheKeySuffix: initialGenerationSeed,
-              generationSeed: initialGenerationSeed,
-              temperature: resolveInitialGenerationTemperature(input.requestNonce),
-              excludeSignatures: excludedSignatures,
-            },
-          ),
-          input.timeoutMs,
-          '生成超时，请检查网络或 API 配置后重试',
-        )
-      },
+      }),
+      input.timeoutMs,
+      GENERATE_TIMEOUT_MESSAGE,
     )
 
-    if (sourceResult.source === 'backend') {
-      const saved = upsertStoredQuestions(sourceResult.payload.session.questions)
-      const session = replaceActivePracticeSession(sourceResult.payload.session)
-      const shouldKeepJob = shouldKeepGenerationJobAfterInitial({
-        targetCount: input.targetCount,
-        loadedCount: Math.max(
-          Number(sourceResult.payload.generationJob?.loadedCount || 0),
-          sourceResult.payload.session.questions.length,
-        ),
-        status: sourceResult.payload.generationJob?.status,
-      })
-
-      if (shouldKeepJob) {
-        replaceGenerationJob(sourceResult.payload.generationJob)
-      } else {
-        clearGenerationJob()
-      }
-
-      if (!session) {
-        throw new Error('题目生成成功，但会话初始化失败')
-      }
-
-      return {
-        success: true,
-        output: {
-          savedCount: Math.max(saved.length, Number(sourceResult.payload.savedCount || 0)),
-          sessionId: session.id,
-        },
-      }
-    }
-
-    const result = sourceResult.payload
-    if (!result.success || !result.output) {
+    if (!backendResult) {
       return {
         success: false,
-        error: result.error || GENERATE_FAIL_MESSAGE,
+        error: '后端返回空结果',
       }
     }
 
-    const saved = addGeneratedQuestions(result.output.questions, input.mode)
-    if (saved.length === 0) {
-      return {
-        success: false,
-        error: '本次没有可用题目，请调整材料后重试',
-      }
-    }
+    const saved = upsertStoredQuestions(backendResult.session.questions)
+    const session = replaceActivePracticeSession(backendResult.session)
+    const shouldKeepJob = shouldKeepGenerationJobAfterInitial({
+      targetCount: input.targetCount,
+      loadedCount: Math.max(
+        Number(backendResult.generationJob?.loadedCount || 0),
+        backendResult.session.questions.length,
+      ),
+      status: backendResult.generationJob?.status,
+    })
 
-    const session = saveActivePracticeSession(saved, input.mode, input.feedbackMode)
-    if (saved.length < input.targetCount) {
-      createGenerationJobAfterInitial({
-        sessionId: session.id,
-        material: input.material,
-        type: input.type,
-        difficulty: input.difficulty,
-        mode: input.mode,
-        feedbackMode: input.feedbackMode,
-        userTags: input.userTags,
-        targetCount: input.targetCount,
-        initialQuestions: saved,
-        keypoints: result.output.keypoints,
-      })
+    if (shouldKeepJob) {
+      replaceGenerationJob(backendResult.generationJob)
     } else {
       clearGenerationJob()
+    }
+
+    if (!session) {
+      throw new Error(GENERATE_INVALID_SESSION_MESSAGE)
     }
 
     return {
       success: true,
       output: {
-        savedCount: saved.length,
+        savedCount: Math.max(saved.length, Number(backendResult.savedCount || 0)),
         sessionId: session.id,
       },
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message.trim() : ''
+    // 提取后端错误消息
+    let message = ''
+    if (error instanceof BackendApiError) {
+      message = error.message
+    } else if (error instanceof Error) {
+      message = error.message
+    } else {
+      message = GENERATE_FAIL_MESSAGE
+    }
+
+    // 开发环境下记录日志
+    if (isDevRuntime()) {
+      console.error('Generate failed:', error)
+    }
+
     return {
       success: false,
-      error: message || GENERATE_FAIL_MESSAGE,
+      error: message.trim() || GENERATE_FAIL_MESSAGE,
     }
   }
 }

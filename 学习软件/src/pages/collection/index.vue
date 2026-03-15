@@ -522,15 +522,6 @@ function resolveTagOrderIndex(rawTag: unknown): number {
 
 function sortByTagOrder(list: QuizRuntime[]): QuizRuntime[] {
   return [...list].sort((a, b) => {
-    const orderA = Number.isFinite(Number(a.category_order))
-      ? Number(a.category_order)
-      : resolveTagOrderIndex(a.tag)
-    const orderB = Number.isFinite(Number(b.category_order))
-      ? Number(b.category_order)
-      : resolveTagOrderIndex(b.tag)
-    const orderDiff = orderA - orderB
-    if (orderDiff !== 0) return orderDiff
-
     const timeDiff = Number(b.createdAt || 0) - Number(a.createdAt || 0)
     if (timeDiff !== 0) return timeDiff
 
@@ -984,11 +975,12 @@ function applyFilter(preferredIndex = currentIndex.value) {
     }
     return true
   })
+  const sortedByNewest = sortByTagOrder(listByTab)
 
   const normalizedSelectedTag = normalizeTagText(selectedTag.value)
   quizList.value = normalizedSelectedTag === DEFAULT_GENERAL_TAG
-    ? sortByTagOrder(listByTab)
-    : listByTab.filter((item) => matchesSelectedTag(item.tag, selectedTag.value))
+    ? sortedByNewest
+    : sortedByNewest.filter((item) => matchesSelectedTag(item.tag, selectedTag.value))
 
   if (quizList.value.length === 0) {
     currentIndex.value = 0

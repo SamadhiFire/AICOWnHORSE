@@ -8,6 +8,7 @@ import {
 } from '../utils/backend-sync'
 
 export type GenerationSource = 'backend' | 'local_fallback'
+type LocalFallbackReason = 'backend_error' | 'backend_empty' | 'planned_endpoint'
 
 export type InitialGenerationSourceResult =
   | {
@@ -17,6 +18,8 @@ export type InitialGenerationSourceResult =
   | {
       source: 'local_fallback'
       payload: GenerateResult
+      fallbackReason?: LocalFallbackReason
+      backendErrorMessage?: string
     }
 
 export type BatchGenerationSourceResult =
@@ -27,6 +30,8 @@ export type BatchGenerationSourceResult =
   | {
       source: 'local_fallback'
       payload: GenerateResult
+      fallbackReason?: LocalFallbackReason
+      backendErrorMessage?: string
     }
 
 export async function requestInitialGenerationFromPreferredSource(
@@ -41,15 +46,10 @@ export async function requestInitialGenerationFromPreferredSource(
         payload: remotePayload,
       }
     }
+    throw new Error('后端返回无效数据')
   } catch (error) {
-    if (!isPlannedEndpointError(error)) {
-      // fall back to the local adapter when backend is unavailable or transiently broken
-    }
-  }
-
-  return {
-    source: 'local_fallback',
-    payload: await runLocalFallback(),
+    // 不再使用本地兜底，直接抛出错误
+    throw error
   }
 }
 
@@ -66,14 +66,9 @@ export async function requestBatchGenerationFromPreferredSource(
         payload: remotePayload,
       }
     }
+    throw new Error('后端返回无效数据')
   } catch (error) {
-    if (!isPlannedEndpointError(error)) {
-      // fall back to the local adapter when backend is unavailable or transiently broken
-    }
-  }
-
-  return {
-    source: 'local_fallback',
-    payload: await runLocalFallback(),
+    // 不再使用本地兜底，直接抛出错误
+    throw error
   }
 }

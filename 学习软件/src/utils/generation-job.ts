@@ -21,7 +21,8 @@ import {
   type PracticeSession,
   replaceActivePracticeSession,
 } from './practice-session'
-import { requestBatchGenerationFromPreferredSource } from '../services/practice-generation-source-service'
+import { triggerGenerationBatchInBackend } from './backend-sync'
+import { BackendApiError } from './backend-api'
 
 export type GenerationBatchIndex = 1 | 2 | 3
 export type GenerationBatchStatus = 'pending' | 'loading' | 'done' | 'error'
@@ -564,81 +565,27 @@ export async function triggerGenerationBatch(
         )
 
         if (batchIndex === 2 || batchIndex === 3) {
-          const sourceResult = await requestBatchGenerationFromPreferredSource(
+          const remotePayload = await triggerGenerationBatchInBackend(
             workingJob.jobId,
             batchIndex,
-            runLocalFallback,
           )
 
-          if (sourceResult.source === 'backend') {
-            const latestQuestions = Array.isArray(sourceResult.payload.questions) && sourceResult.payload.questions.length > 0
-              ? sourceResult.payload.questions
-              : sourceResult.payload.session.questions
-            upsertStoredQuestions(latestQuestions)
-            replaceActivePracticeSession(sourceResult.payload.session)
-            return replaceGenerationJob(sourceResult.payload.generationJob)
-          }
-
-          const result = sourceResult.payload
-          if (!result.success || !result.output) {
-            lastError = result.error || '生成失败，请重试'
+          if (!remotePayload) {
+            lastError = '后端返回空结果'
             continue
           }
 
-          const freshQuestions = filterFreshQuestions(
-            result.output.questions,
-            workingJob.usedStemSignatures,
-            requestedCount,
-          )
-          if (freshQuestions.length <= 0) {
-            lastError = '当前批次未生成新题，请重试'
+          if (!remotePayload.session || !remotePayload.generationJob) {
+            lastError = '后端返回无效数据'
             continue
           }
 
-          const sessionBefore = loadActivePracticeSession()
-          if (!sessionBefore || sessionBefore.id !== workingJob.sessionId) {
-            lastError = '练习会话已失效，请重新生成'
-            break
-          }
-
-          const savedQuestions = addGeneratedQuestions(freshQuestions, workingJob.mode)
-          if (savedQuestions.length <= 0) {
-            lastError = '当前批次未生成新题，请重试'
-            continue
-          }
-
-          const sessionAfter = appendQuestionsToActivePracticeSession(workingJob.sessionId, savedQuestions)
-          if (!sessionAfter || sessionAfter.id !== workingJob.sessionId) {
-            lastError = '练习会话已失效，请重新生成'
-            break
-          }
-
-          const loadedDelta = Math.max(0, sessionAfter.questions.length - sessionBefore.questions.length)
-          if (loadedDelta <= 0) {
-            lastError = '当前批次未生成新题，请重试'
-            continue
-          }
-
-          const latestBeforeCommit = loadGenerationJobBySession(normalizedSessionId)
-          if (!latestBeforeCommit || latestBeforeCommit.nonce !== nonceAtStart || latestBeforeCommit.status !== 'running') {
-            return latestBeforeCommit
-          }
-
-          const doneJob = cloneJob(latestBeforeCommit)
-          doneJob.loadedCount = Math.min(
-            doneJob.targetCount,
-            Math.max(doneJob.loadedCount + loadedDelta, sessionAfter.questions.length),
-          )
-          doneJob.keypoints = mergeKeypoints(doneJob.keypoints, result.output.keypoints || [])
-          doneJob.usedStemSignatures = mergeUsedSignatures(doneJob.usedStemSignatures, savedQuestions)
-          const batchState = doneJob.batchState[key]
-          const batchTarget = Math.max(0, Number(batchState.requestedCount || 0))
-          const previousBatchLoaded = Math.max(0, Number(batchState.loadedCount || 0))
-          const nextBatchLoaded = Math.min(batchTarget, previousBatchLoaded + loadedDelta)
-          batchState.loadedCount = nextBatchLoaded
-          batchState.error = ''
-          batchState.status = nextBatchLoaded >= batchTarget ? 'done' : 'pending'
-          return saveJob(markJobCompletedIfNeeded(doneJob))
+          const latestQuestions = Array.isArray(remotePayload.questions) && remotePayload.questions.length > 0
+            ? remotePayload.questions
+            : remotePayload.session.questions
+          upsertStoredQuestions(latestQuestions)
+          replaceActivePracticeSession(remotePayload.session)
+          return replaceGenerationJob(remotePayload.generationJob)
         }
 
         const result = await runLocalFallback()

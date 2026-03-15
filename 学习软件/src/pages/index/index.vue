@@ -292,16 +292,19 @@ const modeHintText = computed(() =>
 const feedbackHintText = computed(() =>
   feedbackMode.value === 'instant' ? '答一题出一解析' : '完卷后统一查看',
 )
+const isMounted = ref(true)
+let stopWatchMaterial: () => void
+let stopWatchMaterialMode: () => void
 const ERROR_INVALID_API_KEY = '请先填写正确的 API Key'
 const ERROR_EMPTY_MATERIAL = '请先输入学习材料'
-const ERROR_MODE_A_MATERIAL_TOO_SHORT = '使用‘原文提取’功能时，学习材料建议不少于 50 字'
+const ERROR_MODE_A_MATERIAL_TOO_SHORT = '【原文提取】功能下，材料不得少于50字，可切换至【知识拓展】'
 const ERROR_MODE_B_NEED_KEYWORDS = '使用‘知识拓展’时，请输入核心知识点关键词'
 const ERROR_GENERATE_TIMEOUT = '生成超时，请检查网络或 API 配置后重试'
-const PIPELINE_TIMEOUT_MIN_MS = 120000
-const PIPELINE_TIMEOUT_MAX_MS = 300000
-const PIPELINE_TIMEOUT_BASE_MS = 160000
+const PIPELINE_TIMEOUT_MIN_MS = 300000
+const PIPELINE_TIMEOUT_MAX_MS = 600000
+const PIPELINE_TIMEOUT_BASE_MS = 300000
 const PIPELINE_TIMEOUT_PER_QUESTION_MS = 6000
-const PIPELINE_TIMEOUT_MODE_B_EXTRA_MS = 15000
+const PIPELINE_TIMEOUT_MODE_B_EXTRA_MS = 30000
 const MATERIAL_DRAFT_STORAGE_MAX_CHARS = 1200
 const MATERIAL_DRAFT_STORAGE_DEBOUNCE_MS = 360
 const HEADER_BASE_EXTRA_TOP_RPX = 32
@@ -325,9 +328,15 @@ let materialDraftStorageShadow = ''
 const MIN_CUSTOM_COUNT = 1
 const MAX_CUSTOM_COUNT = 50
 
+function isBrowserTabBackgroundHidden(): boolean {
+  try {
+    return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  } catch {
+    return false
+  }
+}
+
 onShow(() => {
-  // 返回本页时强制清理可能残留的加载态，避免蒙层卡住页面交互
-  isLoading.value = false
   safeTopPx.value = resolveTitleSafeTopPadding()
   screenWidthPx.value = resolveScreenWidthPx()
   syncPageHeaderHeight()
@@ -364,16 +373,24 @@ onLoad(() => {
 })
 
 onHide(() => {
-  // 离开页面时清理加载态，防止 navigateBack 回来后仍显示 overlay
-  generateRequestNonce.value += 1
-  generateCanceled.value = true
-  isLoading.value = false
+  // H5 浏览器标签切后台时不主动取消，允许生成任务继续进行。
+  // 仅在真正离开当前页面（非 document.hidden）时终止本页生成态。
+  if (!isBrowserTabBackgroundHidden()) {
+    generateRequestNonce.value += 1
+    generateCanceled.value = true
+    isLoading.value = false
+  }
   flushMaterialDraftSync()
   clearGenerateBreathPulse()
   clearApiGuideTimers()
 })
 
 onUnload(() => {
+  isMounted.value = false
+  // 页面真实销毁时终止本页请求回流，避免卸载后状态更新。
+  generateRequestNonce.value += 1
+  generateCanceled.value = true
+  isLoading.value = false
   flushMaterialDraftSync()
   clearGenerateBreathPulse()
   clearApiGuideTimers()
@@ -431,8 +448,10 @@ function resolvePageHeaderFallbackHeight(topPx: number, widthPx: number): number
 function syncPageHeaderHeight() {
   const fallbackHeight = resolvePageHeaderFallbackHeight(safeTopPx.value, screenWidthPx.value)
   nextTick(() => {
+    if (!isMounted.value) return
     const query = uni.createSelectorQuery()
     query.select('.page-header-fixed').boundingClientRect((rect) => {
+      if (!isMounted.value) return
       const node = Array.isArray(rect) ? rect[0] : rect
       const measuredHeight = Math.round(Number(node?.height || 0))
       pageHeaderHeightPx.value = measuredHeight > 0 ? measuredHeight : fallbackHeight
@@ -831,7 +850,7 @@ async function onGenerate() {
   }
 }
 
-watch(material, (nextMaterial) => {
+stopWatchMaterial = watch(material, (nextMaterial) => {
   syncMaterialDraft(String(nextMaterial || ''))
 })
 
@@ -1141,6 +1160,18 @@ watch([material, mode], () => {
   box-shadow: 0 10rpx 40rpx rgba(0, 0, 0, 0.1);
   padding: 40rpx;
 }
+
+/* #ifdef H5 */
+@media screen and (min-width: 768px) {
+  .count-dialog-mask {
+    padding: 0 24px;
+  }
+
+  .count-dialog {
+    max-width: 760px;
+  }
+}
+/* #endif */
 
 .count-dialog-title {
   display: block;
